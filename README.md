@@ -21,7 +21,8 @@ Analysis and Visualization:
 Plot the training process, including loss and accuracy over epochs.
 Generate Grad-CAM-based saliency maps to visualize which parts of the images the models focus on during classification.
 Perform hyperparameter tuning, data augmentation, and explore various network architectures to enhance model accuracy.
-Dataset
+
+# Dataset
 
 The dataset contains 821 images of urban scenes in London, annotated in Pascal VOC format for object detection. The dataset is provided by the RAMI group and includes monocular camera information.
 
