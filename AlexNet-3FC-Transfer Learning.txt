@@ -1,0 +1,222 @@
+import os
+import glob
+import xml.etree.ElementTree as ET
+import torch.nn as nn
+import torch.optim as optim
+import torch
+import torchvision.transforms as transforms
+from torchvision.datasets import ImageFolder
+from torch.utils.data import DataLoader
+from PIL import Image
+import datetime as dt
+import torchvision.models as models
+
+start_time = dt.datetime.now()
+print('Start learning at {}'.format(str(start_time)))
+
+# Define your number of output classes
+num_classes = 3  # 'cars', 'pedestrians', 'bikes'
+
+def parse_voc_annotation(xml_file):
+    tree = ET.parse(xml_file)
+    root = tree.getroot()
+
+    objects_count = {
+        'cars': 0,
+        'pedestrians': 0,
+        'bikes': 0
+    }
+
+    for obj in root.findall('object'):
+        label_elem = obj.find('name')
+        if label_elem is not None:
+            label = label_elem.text.strip().lower()  # Normalize label (strip whitespace, convert to lowercase)
+            if label in objects_count:
+                objects_count[label] += 1
+            else:
+                print(f"Unknown label found: {label}")
+        else:
+            print("No 'name' tag found for object.")
+
+    return objects_count
+
+def load_dataset(data_dir):
+    image_paths = []
+    annotation_paths = []
+    objects_counts = {
+        'cars': 0,
+        'pedestrians': 0,
+        'bikes': 0
+    }
+
+    # List all JPEG files in the data_dir (train/valid/test)
+    jpeg_files = glob.glob(os.path.join(data_dir, '*.jpg'))
+
+    # Iterate over each JPEG file to find corresponding XML file
+    for jpeg_file in jpeg_files:
+        image_name = os.path.basename(jpeg_file)
+        annotation_file = os.path.join(data_dir, image_name[:-4] + '.xml')
+
+        # Check if corresponding XML annotation file exists
+        if os.path.exists(annotation_file):
+            image_paths.append(jpeg_file)
+            annotation_paths.append(annotation_file)
+
+            # Parse annotation file to count objects by class
+            class_counts = parse_voc_annotation(annotation_file)
+            for class_label, count in class_counts.items():
+                objects_counts[class_label] += count
+        else:
+            print(f"Annotation file not found for image: {image_name}")
+
+    return image_paths, annotation_paths, objects_counts
+
+def load_separate_datasets(train_folder, valid_folder, test_folder):
+    train_images, train_annotations, train_objects_counts = load_dataset(train_folder)
+    val_images, val_annotations, val_objects_counts = load_dataset(valid_folder)
+    test_images, test_annotations, test_objects_counts = load_dataset(test_folder)
+
+    return (train_images, train_annotations, train_objects_counts), (val_images, val_annotations, val_objects_counts), (test_images, test_annotations, test_objects_counts)
+
+# Path to training, validation, and test folders
+train_folder = r"C:\Users\91979\Desktop\Msc Course\Semester 2\Machine Learning\Project 2\final1.voc\final1.voc\train"
+valid_folder = r"C:\Users\91979\Desktop\Msc Course\Semester 2\Machine Learning\Project 2\final1.voc\final1.voc\valid"
+test_folder = r"C:\Users\91979\Desktop\Msc Course\Semester 2\Machine Learning\Project 2\final1.voc\final1.voc\test"
+
+(train_images, train_annotations, train_objects_counts), (val_images, val_annotations, val_objects_counts), (test_images, test_annotations, test_objects_counts) = load_separate_datasets(train_folder, valid_folder, test_folder)
+
+print(f"Training images: {len(train_images)}, Training annotations: {len(train_annotations)}")
+print(f"Validation images: {len(val_images)}, Validation annotations: {len(val_annotations)}")
+print(f"Testing images: {len(test_images)}, Testing annotations: {len(test_annotations)}")
+
+# Display object counts by class for each dataset split
+print("Training dataset object counts:")
+for class_label, count in train_objects_counts.items():
+    print(f"{class_label}: {count}")
+
+print("\nValidation dataset object counts:")
+for class_label, count in val_objects_counts.items():
+    print(f"{class_label}: {count}")
+
+print("\nTesting dataset object counts:")
+for class_label, count in test_objects_counts.items():
+    print(f"{class_label}: {count}")
+
+# Define data transforms
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),  # Resize images to fit AlexNet input size
+    transforms.ToTensor(),           # Convert to tensor
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Normalize
+])
+
+# Define custom dataset class for loading images and annotations
+class CustomDataset(torch.utils.data.Dataset):
+    def __init__(self, image_paths, annotation_paths, transform=None):
+        self.image_paths = image_paths
+        self.annotation_paths = annotation_paths
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.image_paths)
+
+    def __getitem__(self, idx):
+        img_path = self.image_paths[idx]
+        annotation_path = self.annotation_paths[idx]
+        
+        image = Image.open(img_path).convert('RGB')
+        if self.transform:
+            image = self.transform(image)
+
+        # Parse annotation file to get label
+        class_counts = parse_voc_annotation(annotation_path)
+        label = [class_counts['cars'], class_counts['pedestrians'], class_counts['bikes']]
+        label = torch.tensor(label)
+
+        return image, label
+
+# Create custom datasets and data loaders
+train_dataset = CustomDataset(train_images, train_annotations, transform=transform)
+val_dataset = CustomDataset(val_images, val_annotations, transform=transform)
+test_dataset = CustomDataset(test_images, test_annotations, transform=transform)
+
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=32)
+test_loader = DataLoader(test_dataset, batch_size=32)
+
+# Load pre-trained model (AlexNet in this case)
+model = models.alexnet(pretrained=True)
+
+# Modify the classifier for your specific task
+num_features = model.classifier[6].in_features
+# Add two more FC layers
+model.classifier = nn.Sequential(
+    nn.Linear(num_features, 4096),
+    nn.ReLU(inplace=True),
+    nn.Dropout(p=0.5),
+    nn.Linear(4096, 4096),
+    nn.ReLU(inplace=True),
+    nn.Dropout(p=0.5),
+    nn.Linear(4096, num_classes)  # Modify to output the desired number of classes
+)
+
+# Define loss function and optimizer
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+
+# Train the model
+def train_model(model, train_loader, val_loader, criterion, optimizer, num_epochs=5):
+    for epoch in range(num_epochs):
+        model.train()
+        running_loss = 0.0
+        for inputs, labels in train_loader:
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs, labels.argmax(dim=1))  # Assume labels are in one-hot format
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item() * inputs.size(0)
+        
+        # Validation
+        model.eval()
+        val_loss = 0.0
+        correct_preds = 0
+        total_preds = 0
+        with torch.no_grad():
+            for inputs, labels in val_loader:
+                outputs = model(inputs)
+                loss = criterion(outputs, labels.argmax(dim=1))
+                val_loss += loss.item() * inputs.size(0)
+                _, predicted = torch.max(outputs, 1)
+                correct_preds += (predicted == labels.argmax(dim=1)).sum().item()
+                total_preds += labels.size(0)
+        
+        epoch_loss = running_loss / len(train_loader.dataset)
+        val_epoch_loss = val_loss / len(val_loader.dataset)
+        val_accuracy = correct_preds / total_preds
+        
+        print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {epoch_loss:.4f}, Val Loss: {val_epoch_loss:.4f}, Val Acc: {val_accuracy:.4f}")
+
+# Example usage
+train_model(model, train_loader, val_loader, criterion, optimizer, num_epochs=5)
+
+# Evaluation on test set
+model.eval()
+test_loss = 0.0
+correct_preds = 0
+total_preds = 0
+with torch.no_grad():
+    for inputs, labels in test_loader:
+        outputs = model(inputs)
+        loss = criterion(outputs, labels.argmax(dim=1))
+        test_loss += loss.item() * inputs.size(0)
+        _, predicted = torch.max(outputs, 1)
+        correct_preds += (predicted == labels.argmax(dim=1)).sum().item()
+        total_preds += labels.size(0)
+
+test_accuracy = correct_preds / total_preds
+print(f"Test Loss: {test_loss / len(test_loader.dataset):.4f}, Test Accuracy: {test_accuracy:.4f}")
+
+end_time = dt.datetime.now() 
+print('Stop learning {}'.format(str(end_time)))
+elapsed_time= end_time - start_time
+print('Elapsed learning {}'.format(str(elapsed_time)))

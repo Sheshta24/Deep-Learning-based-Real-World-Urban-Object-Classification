@@ -1,0 +1,338 @@
+import os
+import glob
+import xml.etree.ElementTree as ET
+import torch.nn as nn
+import torch.optim as optim
+import torch
+import torchvision.transforms as transforms
+from torchvision.datasets import ImageFolder
+from torch.utils.data import DataLoader
+from PIL import Image
+import datetime as dt
+import torchvision.models as models
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics import confusion_matrix
+
+start_time = dt.datetime.now()
+print('Start learning at {}'.format(str(start_time)))
+
+# Define your number of output classes
+num_classes = 3  # 'car', 'pedestrian', 'bike'
+num_epochs = 25  # Define number of epochs
+
+def parse_voc_annotation(xml_file):
+    tree = ET.parse(xml_file)
+    root = tree.getroot()
+
+    objects_count = {
+        'car': 0,
+        'pedestrian': 0,
+        'bike': 0
+    }
+
+    for obj in root.findall('object'):
+        label_elem = obj.find('name')
+        if label_elem is not None:
+            label = label_elem.text.strip().lower()  # Normalize label (strip whitespace, convert to lowercase)
+            if label in objects_count:
+                objects_count[label] += 1
+            else:
+                print(f"Unknown label found: {label}")
+        else:
+            print("No 'name' tag found for object.")
+
+    return objects_count
+
+
+def load_dataset(data_dir):
+    image_paths = []
+    annotation_paths = []
+    objects_counts = {
+        'car': 0,
+        'pedestrian': 0,
+        'bike': 0
+    }
+
+    # List all JPEG files in the data_dir (train/valid/test)
+    jpeg_files = glob.glob(os.path.join(data_dir, '*.jpg'))
+
+    # Iterate over each JPEG file to find corresponding XML file
+    for jpeg_file in jpeg_files:
+        image_name = os.path.basename(jpeg_file)
+        annotation_file = os.path.join(data_dir, image_name[:-4] + '.xml')
+
+        # Check if corresponding XML annotation file exists
+        if os.path.exists(annotation_file):
+            image_paths.append(jpeg_file)
+            annotation_paths.append(annotation_file)
+
+            # Parse annotation file to count objects by class
+            class_counts = parse_voc_annotation(annotation_file)
+            for class_label, count in class_counts.items():
+                objects_counts[class_label] += count
+        else:
+            print(f"Annotation file not found for image: {image_name}")
+
+    return image_paths, annotation_paths, objects_counts
+
+def split_data(image_paths, annotation_paths, split_ratio):
+    num_samples = len(image_paths)
+    num_train = int(split_ratio[0] * num_samples)
+    num_val = int(split_ratio[1] * num_samples)
+    num_test = num_samples - num_train - num_val
+    
+    # Shuffle indices
+    indices = np.arange(num_samples)
+    np.random.shuffle(indices)
+    
+    # Split indices
+    train_indices = indices[:num_train]
+    val_indices = indices[num_train:num_train+num_val]
+    test_indices = indices[num_train+num_val:]
+    
+    # Split data based on indices
+    train_images = [image_paths[i] for i in train_indices]
+    train_annotations = [annotation_paths[i] for i in train_indices]
+    
+    val_images = [image_paths[i] for i in val_indices]
+    val_annotations = [annotation_paths[i] for i in val_indices]
+    
+    test_images = [image_paths[i] for i in test_indices]
+    test_annotations = [annotation_paths[i] for i in test_indices]
+    
+    return train_images, train_annotations, val_images, val_annotations, test_images, test_annotations
+
+def load_separate_datasets(train_folder, valid_folder, test_folder):
+    train_images, train_annotations, train_objects_counts = load_dataset(train_folder)
+    val_images, val_annotations, val_objects_counts = load_dataset(valid_folder)
+    test_images, test_annotations, test_objects_counts = load_dataset(test_folder)
+
+    # Split data into training, validation, and testing sets
+    train_images, train_annotations, val_images, val_annotations, test_images, test_annotations = \
+        split_data(train_images, train_annotations, [0.6, 0.2, 0.2])
+
+    return (train_images, train_annotations, train_objects_counts), (val_images, val_annotations, val_objects_counts), (test_images, test_annotations, test_objects_counts)
+
+# Path to folders containing images and annotations
+data_folder_car = r"C:\Users\91979\Desktop\Msc Course\Semester 2\Machine Learning\Project 2\group1dataset\car"
+data_folder_pedestrian = r"C:\Users\91979\Desktop\Msc Course\Semester 2\Machine Learning\Project 2\group1dataset\pedestrian"
+data_folder_bike = r"C:\Users\91979\Desktop\Msc Course\Semester 2\Machine Learning\Project 2\group1dataset\bike"
+
+(train_images_car, train_annotations_car, train_objects_counts_car), (val_images_car, val_annotations_car, val_objects_counts_car), (test_images_car, test_annotations_car, test_objects_counts_car) = \
+    load_separate_datasets(data_folder_car, data_folder_car, data_folder_car)
+
+(train_images_pedestrian, train_annotations_pedestrian, train_objects_counts_pedestrian), (val_images_pedestrian, val_annotations_pedestrian, val_objects_counts_pedestrian), (test_images_pedestrian, test_annotations_pedestrian, test_objects_counts_pedestrian) = \
+    load_separate_datasets(data_folder_pedestrian, data_folder_pedestrian, data_folder_pedestrian)
+
+(train_images_bike, train_annotations_bike, train_objects_counts_bike), (val_images_bike, val_annotations_bike, val_objects_counts_bike), (test_images_bike, test_annotations_bike, test_objects_counts_bike) = \
+    load_separate_datasets(data_folder_bike, data_folder_bike, data_folder_bike)
+
+# Combine data from different classes
+train_images = train_images_car + train_images_pedestrian + train_images_bike
+train_annotations = train_annotations_car + train_annotations_pedestrian + train_annotations_bike
+val_images = val_images_car + val_images_pedestrian + val_images_bike
+val_annotations = val_annotations_car + val_annotations_pedestrian + val_annotations_bike
+test_images = test_images_car + test_images_pedestrian + test_images_bike
+test_annotations = test_annotations_car + test_annotations_pedestrian + test_annotations_bike
+
+print(f"Training images: {len(train_images)}, Training annotations: {len(train_annotations)}")
+print(f"Validation images: {len(val_images)}, Validation annotations: {len(val_annotations)}")
+print(f"Testing images: {len(test_images)}, Testing annotations: {len(test_annotations)}")
+
+# Display only the final count of objects across each class for each dataset split
+print("Dataset object counts:")
+print("Car:", train_objects_counts_car['car'])
+print("Pedestrian:", train_objects_counts_pedestrian['pedestrian'])
+print("Bike:", train_objects_counts_bike['bike'])
+
+
+# Define data transforms
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),  # Resize images to fit AlexNet input size
+    transforms.ToTensor(),           # Convert to tensor
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Normalize
+])
+
+# Define custom dataset class for loading images and annotations
+class CustomDataset(torch.utils.data.Dataset):
+    def __init__(self, image_paths, annotation_paths, transform=None):
+        self.image_paths = image_paths
+        self.annotation_paths = annotation_paths
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.image_paths)
+
+    def __getitem__(self, idx):
+        img_path = self.image_paths[idx]
+        annotation_path = self.annotation_paths[idx]
+        
+        image = Image.open(img_path).convert('RGB')
+        if self.transform:
+            image = self.transform(image)
+
+        # Parse annotation file to get label
+        class_counts = parse_voc_annotation(annotation_path)
+        label = [class_counts['car'], class_counts['pedestrian'], class_counts['bike']]
+        label = torch.tensor(label)
+
+        return image, label
+
+# Create custom datasets and data loaders
+train_dataset = CustomDataset(train_images, train_annotations, transform=transform)
+val_dataset = CustomDataset(val_images, val_annotations, transform=transform)
+test_dataset = CustomDataset(test_images, test_annotations, transform=transform)
+
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=32)
+test_loader = DataLoader(test_dataset, batch_size=32)
+
+# Load pre-trained model (AlexNet in this case)
+model = models.alexnet(pretrained=True)
+
+# Modify the classifier for your specific task
+num_features = model.classifier[6].in_features
+model.classifier[6] = nn.Linear(num_features, num_classes)
+
+# Define loss function and optimizer
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+
+# Train the model with accuracy and loss collection
+def train_model(model, train_loader, val_loader, criterion, optimizer, num_epochs=num_epochs):  # Define num_epochs here
+    train_losses = []
+    val_losses = []
+    train_accuracies = []
+    val_accuracies = []
+    
+    for epoch in range(num_epochs):
+        model.train()
+        running_loss = 0.0
+        correct_preds_train = 0
+        total_train = 0
+        
+        for inputs, labels in train_loader:
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs, labels.argmax(dim=1))
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item() * inputs.size(0)
+            
+            _, predicted = torch.max(outputs, 1)
+            correct_preds_train += (predicted == labels.argmax(dim=1)).sum().item()
+            total_train += labels.size(0)
+            
+        epoch_train_loss = running_loss / len(train_loader.dataset)
+        train_losses.append(epoch_train_loss)
+        train_accuracy = correct_preds_train / total_train
+        train_accuracies.append(train_accuracy)
+
+        # Validation
+        model.eval()
+        val_loss = 0.0
+        correct_preds_val = 0
+        total_val = 0
+        
+        with torch.no_grad():
+            for inputs, labels in val_loader:
+                outputs = model(inputs)
+                loss = criterion(outputs, labels.argmax(dim=1))
+                val_loss += loss.item() * inputs.size(0)
+                
+                _, predicted = torch.max(outputs, 1)
+                correct_preds_val += (predicted == labels.argmax(dim=1)).sum().item()
+                total_val += labels.size(0)
+                
+        epoch_val_loss = val_loss / len(val_loader.dataset)
+        val_losses.append(epoch_val_loss)
+        val_accuracy = correct_preds_val / total_val
+        val_accuracies.append(val_accuracy)
+        
+        print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {epoch_train_loss:.4f}, Val Loss: {epoch_val_loss:.4f}, Val Acc: {val_accuracy:.4f}")
+        
+    return train_losses, val_losses, train_accuracies, val_accuracies
+
+# Example usage
+train_losses, val_losses, train_accuracies, val_accuracies = train_model(model, train_loader, val_loader, criterion, optimizer, num_epochs=num_epochs)
+
+# Plot accuracy vs. epoch and loss vs. epoch
+plt.figure(figsize=(12, 5))
+
+# Plot accuracy vs. epoch
+plt.subplot(1, 2, 1)
+plt.plot(range(1, num_epochs + 1), train_accuracies, label='Train Accuracy')
+plt.plot(range(1, num_epochs + 1), val_accuracies, label='Validation Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.title('Accuracy vs. Epoch')
+plt.legend()
+
+# Plot loss vs. epoch
+plt.subplot(1, 2, 2)
+plt.plot(range(1, num_epochs + 1), train_losses, label='Train Loss')
+plt.plot(range(1, num_epochs + 1), val_losses, label='Validation Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.title('Loss vs. Epoch')
+plt.legend()
+
+plt.tight_layout()
+plt.show()
+
+# Evaluation on test set
+model.eval()
+test_loss = 0.0
+correct_preds = 0
+total_preds = 0
+with torch.no_grad():
+    for inputs, labels in test_loader:
+        outputs = model(inputs)
+        loss = criterion(outputs, labels.argmax(dim=1))
+        test_loss += loss.item() * inputs.size(0)
+        _, predicted = torch.max(outputs, 1)
+        correct_preds += (predicted == labels.argmax(dim=1)).sum().item()
+        total_preds += labels.size(0)
+
+test_accuracy = correct_preds / total_preds
+print(f"Test Loss: {test_loss / len(test_loader.dataset):.4f}, Test Accuracy: {test_accuracy:.4f}")
+
+# Evaluation on test set
+model.eval()
+all_preds = []
+all_labels = []
+
+with torch.no_grad():
+    for inputs, labels in test_loader:
+        outputs = model(inputs)
+        _, predicted = torch.max(outputs, 1)
+        all_preds.extend(predicted.tolist())
+        all_labels.extend(labels.argmax(dim=1).tolist())
+
+# Confusion Matrix
+cm = confusion_matrix(all_labels, all_preds)
+plt.figure(figsize=(8, 6))
+plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
+plt.title('Confusion Matrix')
+plt.colorbar()
+tick_marks = np.arange(num_classes)
+plt.xticks(tick_marks, ['car', 'pedestrian', 'bike'], rotation=45)
+plt.yticks(tick_marks, ['car', 'pedestrian', 'bike'])
+plt.xlabel('Predicted Label')
+plt.ylabel('True Label')
+for i in range(num_classes):
+    for j in range(num_classes):
+        plt.text(j, i, str(cm[i, j]), horizontalalignment='center', color='white' if cm[i, j] > cm.max() / 2 else 'black')
+plt.tight_layout()
+plt.show()
+
+# Calculate class-wise accuracies
+class_accs = np.diag(cm) / np.sum(cm, axis=1)
+for i, class_label in enumerate(['car', 'pedestrian', 'bike']):
+    print(f"Accuracy for class {class_label}: {class_accs[i]:.4f}")
+
+end_time = dt.datetime.now() 
+print('Stop learning {}'.format(str(end_time)))
+elapsed_time= end_time - start_time
+print('Elapsed learning {}'.format(str(elapsed_time)))
